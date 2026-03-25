@@ -3,16 +3,16 @@ name: Test
   push:
     branches:
       - master
+    tags:
+      - 'v*'
   pull_request:
-    branches:
-      - master
+
 jobs:
   Test:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-python@v2
+      - uses: astral-sh/setup-uv@v7.6.0
         with:
-          python-version: "3.10"
-      - uses: actions/checkout@v2
-      - run: pip install pytest-cov -e .
-      - run: py.test -vvv --cov .
+          python-version: "3.14"
+      - uses: actions/checkout@v4
+      - run: uv run pytest -vvv --cov .
