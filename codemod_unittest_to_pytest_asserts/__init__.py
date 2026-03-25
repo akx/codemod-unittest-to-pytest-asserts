@@ -1,10 +1,11 @@
-#!/usr/bin/env python3
 import ast
 import sys
 from pathlib import Path
 
 import libcst as cst
 from libcst import matchers as m
+
+__version__ = "1.2.0"
 
 TRUE_FALSE_NONE = {"True", "False", "None"}
 
@@ -319,9 +320,6 @@ def transform_file(path: Path) -> bool:
 
 
 def main():
-    if sys.version_info < (3, 9):
-        raise RuntimeError("This script requires Python version >=3.9")
-
     try:
         path = sys.argv[1]
     except IndexError:

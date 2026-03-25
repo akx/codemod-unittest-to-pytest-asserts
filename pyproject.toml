@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codemod-unittest-to-pytest-asserts"
+dynamic = ["version"]
+description = "Codemod to refactor unittest assertions to pytest assertions."
+readme = "README.rst"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Hans-Wilhelm Warlo", email = "hw@warlo.no" },
+    { name = "Aarni Koskela", email = "akx@iki.fi" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "libcst",
+]
+
+[project.scripts]
+codemod-unittest-to-pytest-asserts = "codemod_unittest_to_pytest_asserts:main"
+
+[project.urls]
+Homepage = "https://github.com/hanswilw/codemod-unittest-to-pytest-asserts"
+
+[tool.hatch.version]
+path = "codemod_unittest_to_pytest_asserts/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/codemod_unittest_to_pytest_asserts",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-cov>=7.1.0",
+]
