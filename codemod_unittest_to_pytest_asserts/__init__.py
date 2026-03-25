@@ -1,34 +1,65 @@
 #!/usr/bin/env python3
 import ast
-import re
+import sys
+from pathlib import Path
 
-import astunparse
-import codemod
+import libcst as cst
+from libcst import matchers as m
 
 TRUE_FALSE_NONE = {"True", "False", "None"}
 
-COMMENT_REGEX = re.compile(r"(\s*).*\)(\s*\#.*)")
+_DUMMY_MODULE = cst.Module(body=[])
 
 
 class Malformed(Exception):
     def __init__(self, message="Malformed", *, node):
-        super().__init__(f"{message}: {node}: {astunparse.unparse(node)}")
+        try:
+            source = _DUMMY_MODULE.code_for_node(node)
+        except Exception:
+            source = repr(node)
+        super().__init__(f"{message}: {source}")
 
 
-def parse_args(node):
+def _normalize_code(node):
+    """Get normalized single-line source code for a libcst expression node."""
+    source = _DUMMY_MODULE.code_for_node(node)
+    return ast.unparse(ast.parse(source, mode="eval").body)
+
+
+def _is_constant(node):
+    """Check if a libcst node is a constant/literal value."""
+    return isinstance(node, (cst.Integer, cst.Float, cst.SimpleString))
+
+
+def _get_assert_method_name(call_node):
+    """If call is self.assertXxx(...), return method name. Otherwise None."""
+    if not isinstance(call_node, cst.Call):
+        return None
+    if not m.matches(call_node.func, m.Attribute(value=m.Name("self"))):
+        return None
+    attr = call_node.func.attr
+    name = attr.value if isinstance(attr, cst.Name) else str(attr)
+    return name if name in assert_mapping else None
+
+
+def _get_args(node):
+    """Extract (positional_arg_strings, kwarg_strings, raw_positional_nodes)."""
     args = []
-    kwarg_list = []
-
+    kwargs = []
+    raw = []
     for arg in node.args:
-        args.append(astunparse.unparse(arg).replace("\n", ""))
-    for kwarg in node.keywords:
-        kwarg_list.append(astunparse.unparse(kwarg).replace("\n", ""))
+        code = _normalize_code(arg.value)
+        if arg.keyword is None:
+            args.append(code)
+            raw.append(arg.value)
+        else:
+            key = arg.keyword.value
+            kwargs.append(f"{key}={code}")
+    return args, kwargs, raw
 
-    return args, kwarg_list
 
-
-def parse_args_and_msg(node, required_args_count, *, raise_if_malformed=True):
-    args, kwarg_list = parse_args(node)
+def _parse_args_and_msg(node, required_args_count, *, raise_if_malformed=True):
+    args, kwarg_list, raw = _get_args(node)
     msg = ""
 
     for i, kwarg in enumerate(kwarg_list):
@@ -38,51 +69,51 @@ def parse_args_and_msg(node, required_args_count, *, raise_if_malformed=True):
             kwarg_list.pop(i)
             break
 
-    if len(args) > required_args_count and type(args[required_args_count]) == str:
+    if len(args) > required_args_count and isinstance(args[required_args_count], str):
         msg = args.pop(required_args_count)
+        if len(raw) > required_args_count:
+            raw.pop(required_args_count)
 
     if raise_if_malformed and len(args) != required_args_count:
         raise Malformed(node=node)
 
-    return args, kwarg_list, f", {msg}" if msg else ""
+    return args, kwarg_list, raw, f", {msg}" if msg else ""
 
 
 def _handle_equal_or_unequal(node, *, is_op, cmp_op):
-    args, kwarg_list, msg_with_comma = parse_args_and_msg(node, 2, raise_if_malformed=False)
-
-    if len(args) != 2 or len(kwarg_list) > 0:
-        raise Malformed(f"Potentially malformed", node=node)
-
+    args, kwarg_list, raw, msg = _parse_args_and_msg(
+        node, 2, raise_if_malformed=False
+    )
+    if len(args) != 2 or kwarg_list:
+        raise Malformed("Potentially malformed", node=node)
     if args[0] in TRUE_FALSE_NONE:
-        return f"assert {args[1]} {is_op} {args[0]}{msg_with_comma}"
+        return f"assert {args[1]} {is_op} {args[0]}{msg}"
     if args[1] in TRUE_FALSE_NONE:
-        return f"assert {args[0]} {is_op} {args[1]}{msg_with_comma}"
-
-    # De-yoda expressions like assertEqual("foo", bar) to bar == "foo"
-    if node.args[0].__class__ == ast.Constant and node.args[1].__class__ != ast.Constant:
+        return f"assert {args[0]} {is_op} {args[1]}{msg}"
+    # De-yoda
+    if len(raw) >= 2 and _is_constant(raw[0]) and not _is_constant(raw[1]):
         args = [args[1], args[0]]
-
-    return f"assert {args[0]} {cmp_op} {args[1]}{msg_with_comma}"
+    return f"assert {args[0]} {cmp_op} {args[1]}{msg}"
 
 
 def _handle_prefix_or_suffix(node, *, prefix="", suffix=""):
-    args, _, msg_with_comma = parse_args_and_msg(node, 1)
-    return f"assert {prefix}{args[0]}{suffix}{msg_with_comma}"
+    args, _, _, msg = _parse_args_and_msg(node, 1)
+    return f"assert {prefix}{args[0]}{suffix}{msg}"
 
 
 def _handle_generic_binary(node, *, op):
-    args, _, msg_with_comma = parse_args_and_msg(node, 2)
-    return f"assert {args[0]} {op} {args[1]}{msg_with_comma}"
+    args, _, _, msg = _parse_args_and_msg(node, 2)
+    return f"assert {args[0]} {op} {args[1]}{msg}"
 
 
 def _handle_generic_call(node, *, func):
-    args, _, msg_with_comma = parse_args_and_msg(node, 2)
-    return f"assert {func}({args[0]}, {args[1]}){msg_with_comma}"
+    args, _, _, msg = _parse_args_and_msg(node, 2)
+    return f"assert {func}({args[0]}, {args[1]}){msg}"
 
 
 def _handle_almost_equal(node, *, op):
-    args, _, msg_with_comma = parse_args_and_msg(node, 2)
-    return f"assert round({args[0]} - {args[1]}, 7) {op} 0{msg_with_comma}"
+    args, _, _, msg = _parse_args_and_msg(node, 2)
+    return f"assert round({args[0]} - {args[1]}, 7) {op} 0{msg}"
 
 
 def handle_equal(node):
@@ -157,26 +188,13 @@ def handle_not_almost_equal(node):
     return _handle_almost_equal(node, op="!=")
 
 
-def handle_raises(node, **kwargs):
-    if kwargs.get("withitem"):
-        return handle_with_raises(node, **kwargs)
-    args, _ = parse_args(node)
+def handle_raises(call_node):
+    args, _, _ = _get_args(call_node)
     if len(args) > 2:
-        raise Malformed(node=node)
+        raise Malformed(node=call_node)
     if len(args) == 2:
         return f"pytest.raises({args[0]}, {args[1]})"
-
-
-def handle_with_raises(node, **kwargs):
-    args, _ = parse_args(node)
-    optional_vars = kwargs.get('optional_vars', None)
-    if len(args) > 1:
-        raise Malformed(node=node)
-
-    arg = args[0] if args else ""
-    if optional_vars:
-        return f"with pytest.raises({arg}) as {optional_vars.id}:"
-    return f"with pytest.raises({arg}):"
+    return None
 
 
 assert_mapping = {
@@ -205,164 +223,124 @@ assert_mapping = {
 }
 
 
-def convert(node):
-    node_call = node_get_call(node)
-    f = assert_mapping.get(node_get_func_attr(node_call), None)
-    if not f:
-        return None
+class UnittestToPytestTransformer(cst.CSTTransformer):
+    def __init__(self):
+        self.needs_pytest_import = False
+        self.has_pytest_import = False
 
-    try:
-        if isinstance(node, ast.With):
-            return f(node_call, withitem=True, optional_vars=node.items[0].optional_vars)
-        return f(node_call)
-    except Malformed as e:
-        print(str(e))
-        return None
+    def visit_Import(self, node):
+        if isinstance(node.names, cst.ImportStar):
+            return
+        for alias in node.names:
+            if m.matches(alias.name, m.Name("pytest")):
+                self.has_pytest_import = True
 
+    def leave_SimpleStatementLine(self, original_node, updated_node):
+        if len(updated_node.body) != 1:
+            return updated_node
+        stmt = updated_node.body[0]
+        if not isinstance(stmt, cst.Expr):
+            return updated_node
+        if not isinstance(stmt.value, cst.Call):
+            return updated_node
 
-def dfs_walk(node):
-    """
-    Walk along the nodes of the AST in a DFS fashion returning the pre-order-tree-traversal
-    """
+        call = stmt.value
+        method_name = _get_assert_method_name(call)
+        if not method_name:
+            return updated_node
 
-    stack = [node]
-    for child in ast.iter_child_nodes(node):
-        stack.extend(dfs_walk(child))
-    return stack
+        handler = assert_mapping[method_name]
+        try:
+            result_str = handler(call)
+        except Malformed as e:
+            print(str(e))
+            return updated_node
 
+        if result_str is None:
+            return updated_node
 
-def node_get_func_attr(node):
-    if isinstance(node, ast.Call):
-        return getattr(node.func, "attr", None)
+        if "pytest." in result_str:
+            self.needs_pytest_import = True
 
-
-def node_get_call(node):
-    if not (isinstance(node, ast.Expr) or isinstance(node, ast.With)):
-        return False
-
-    if isinstance(node, ast.Expr):
-        value = getattr(node, "value", None)
-        if isinstance(value, ast.Call):
-            return value
-
-    if isinstance(node, ast.With):
-        value = getattr(
-            node.items[0], "context_expr", None
-        )  # Naively choosing the first item in the with
-        if isinstance(value, ast.Call):
-            return value
-    return None
-
-
-def get_col_offset(node):
-    return node.col_offset
-
-
-def get_lineno(node):
-    # We generally use `lineno` from the AST node, but special case for `With` expressions
-    if isinstance(node, ast.With):
-        return node.items[0].context_expr.lineno
-
-    return node.lineno
-
-
-def get_end_lineno(node):
-    # We generally use `end_lineno` directly from the AST node, but special case for `With` expressions
-    if isinstance(node, ast.With):
-        return node.items[0].context_expr.end_lineno
-
-    return node.end_lineno
-
-
-def assert_patches(list_of_lines):
-    """
-    Main method where we get the list of lines from codemod.
-    1. Parses it with AST
-    2. Traverses the AST in a pre-order-tree traversal
-    3. Grab the Call values we are interested in e.g. `assertEqual()`
-    4. Try executing `convert` on the Call node or continue
-    5. Construct a codemod.Patch for the conversion and replace start->end lines with the conversion
-    6. Handle special cases with importing pytest if it used and not imported, and append comment if it exists.
-    """
-
-    patches = []
-    joined_lines = "".join(list_of_lines)
-    ast_parsed = ast.parse(joined_lines)
-
-    pytest_imported = "import pytest" in joined_lines
-
-    line_deviation = 0
-    for node in dfs_walk(ast_parsed):
-        if not node_get_call(node):
-            continue
-
-        converted = convert(node)
-        if not converted:
-            continue
-
-        assert_line = get_col_offset(node) * " " + converted + "\n"
-        start_line = get_lineno(node)
-        end_line = get_end_lineno(node)
-
-        patches.append(
-            codemod.Patch(
-                start_line - line_deviation - 1,
-                end_line_number=end_line - line_deviation,
-                new_lines=assert_line,
-            )
+        new_stmt = cst.parse_statement(result_str)
+        return new_stmt.with_changes(
+            leading_lines=updated_node.leading_lines,
+            trailing_whitespace=updated_node.trailing_whitespace,
         )
 
-        requires_import = "pytest." in assert_line
-        if requires_import and not pytest_imported:
-            patches.append(
-                codemod.Patch(0, end_line_number=0, new_lines="import pytest\n")
-            )
-            line_deviation -= 1
-            pytest_imported = True
+    def leave_With(self, original_node, updated_node):
+        if not updated_node.items:
+            return updated_node
+        first_item = updated_node.items[0]
+        call = first_item.item
+        if not isinstance(call, cst.Call):
+            return updated_node
 
-        comment_line = COMMENT_REGEX.search(
-            list_of_lines[min(end_line - 1, len(list_of_lines) - 1)]
+        if _get_assert_method_name(call) != "assertRaises":
+            return updated_node
+
+        self.needs_pytest_import = True
+
+        new_call = call.with_changes(
+            func=cst.Attribute(
+                value=cst.Name("pytest"),
+                attr=cst.Name("raises"),
+            )
         )
-        line_deviation += end_line - start_line
+        new_items = list(updated_node.items)
+        new_items[0] = first_item.with_changes(item=new_call)
+        return updated_node.with_changes(items=new_items)
 
-        if comment_line:
-            comment = comment_line.group(1) + comment_line.group(2).lstrip() + "\n"
-            patches.append(
-                codemod.Patch(
-                    end_line - line_deviation,
-                    end_line_number=end_line - line_deviation,
-                    new_lines=comment,
-                )
+    def leave_Module(self, original_node, updated_node):
+        if self.needs_pytest_import and not self.has_pytest_import:
+            import_stmt = cst.parse_statement("import pytest\n")
+            return updated_node.with_changes(
+                body=[import_stmt, *updated_node.body]
             )
-            line_deviation -= 1
-
-    return patches
+        return updated_node
 
 
-def is_py(filename):
-    """
-    Filter method using filename's to select what files to evaluate for codemodding
-    """
+def transform_source(source: str) -> str:
+    """Transform source code, converting unittest asserts to pytest asserts."""
+    tree = cst.parse_module(source)
+    transformer = UnittestToPytestTransformer()
+    new_tree = tree.visit(transformer)
+    return new_tree.code
 
-    return filename.split(".")[-1] == "py"
+
+def transform_file(path: Path) -> bool:
+    """Transform a file in-place. Returns True if changes were made."""
+    source = path.read_text()
+    new_source = transform_source(source)
+    if new_source != source:
+        path.write_text(new_source)
+        return True
+    return False
 
 
 def main():
-    import sys
-    if sys.version_info < (3, 8):
-        raise RuntimeError("This script requires Python version >=3.8")
+    if sys.version_info < (3, 9):
+        raise RuntimeError("This script requires Python version >=3.9")
 
     try:
         path = sys.argv[1]
     except IndexError:
         path = "."
 
-    codemod.Query(
-        assert_patches, path_filter=is_py, root_directory=path
-    ).run_interactive()
-    print(
-        "\nHINT: Consider running a formatter to correctly format your new assertions!"
-    )
+    target = Path(path)
+    if target.is_file():
+        files = [target]
+    else:
+        files = sorted(target.rglob("*.py"))
+
+    changed = 0
+    for f in files:
+        if transform_file(f):
+            print(f"Transformed: {f}")
+            changed += 1
+
+    print(f"\nTransformed {changed} file(s).")
+    print("HINT: Consider running a formatter to correctly format your new assertions!")
 
 
 if __name__ == "__main__":

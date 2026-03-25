@@ -4,12 +4,11 @@ class ExampleTest:
         assert 1 == 1
         assert 1 == 1, '1 should always be 1'
         assert 1 == 1, '1 should always be 1'
-        assert 1 == 1
-        # 1 should always be one
+        assert 1 == 1 # 1 should always be one
 
         def inner_test_method():
             assert 1 == 1
-            with pytest.raises(ValueError):
+            with pytest.raises(ValueError):  # This error is always raised!
                 raise ValueError("SomeError")
 
         innerTestMethod()

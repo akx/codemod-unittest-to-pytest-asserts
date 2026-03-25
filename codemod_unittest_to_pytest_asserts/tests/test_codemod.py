@@ -1,9 +1,7 @@
 import pathlib
 import shutil
 
-import codemod
-
-from codemod_unittest_to_pytest_asserts import assert_patches, is_py
+from codemod_unittest_to_pytest_asserts import transform_file
 
 DIRNAME = pathlib.Path(__file__).parent
 
@@ -14,13 +12,5 @@ PYTEST_FILE = DIRNAME / "pytest_code.py"
 def test_codemod(tmp_path):
     victim = tmp_path / "victim.py"
     shutil.copy(UNITTEST_FILE, victim)
-    for patch in codemod.Query(
-        assert_patches,
-        root_directory=tmp_path,
-        path_filter=is_py,
-    ).generate_patches():
-        lines = list(open(patch.path))
-        patch.apply_to(lines)
-        pathlib.Path(patch.path).write_text("".join(lines))
-
-    assert victim.read_text() == (DIRNAME / PYTEST_FILE).read_text()
+    transform_file(victim)
+    assert victim.read_text() == PYTEST_FILE.read_text()
