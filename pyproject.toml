@@ -44,4 +44,11 @@ include = [
 dev = [
     "pytest>=8.4.2",
     "pytest-cov>=7.1.0",
+    "ruff>=0.15.7",
+]
+
+[tool.ruff]
+exclude = [
+    "tests/pytest_code.py",
+    "tests/unittest_code.py",
 ]

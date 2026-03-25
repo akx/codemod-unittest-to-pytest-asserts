@@ -296,7 +296,7 @@ class UnittestToPytestTransformer(cst.CSTTransformer):
         if self.needs_pytest_import and not self.has_pytest_import:
             import_stmt = cst.parse_statement("import pytest\n")
             return updated_node.with_changes(
-                body=[import_stmt, *updated_node.body]
+                body=[import_stmt, *updated_node.body],
             )
         return updated_node
 
