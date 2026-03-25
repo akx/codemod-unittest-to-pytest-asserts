@@ -5,7 +5,7 @@ from pathlib import Path
 import libcst as cst
 from libcst import matchers as m
 
-__version__ = "1.2.0"
+__version__ = "2.0.0rc1"
 
 TRUE_FALSE_NONE = {"True", "False", "None"}
 
