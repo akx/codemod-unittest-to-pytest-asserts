@@ -32,7 +32,7 @@ def parse_args_and_msg(node, required_args_count, *, raise_if_malformed=True):
     msg = ""
 
     for i, kwarg in enumerate(kwarg_list):
-        key, val = kwarg.split("=")
+        key, val = kwarg.split("=", 1)
         if key == "msg":
             msg = val
             kwarg_list.pop(i)
@@ -173,9 +173,10 @@ def handle_with_raises(node, **kwargs):
     if len(args) > 1:
         raise Malformed(node=node)
 
+    arg = args[0] if args else ""
     if optional_vars:
-        return f"with pytest.raises({args[0]}) as {optional_vars.id}:"
-    return f"with pytest.raises({args[0]}):"
+        return f"with pytest.raises({arg}) as {optional_vars.id}:"
+    return f"with pytest.raises({arg}):"
 
 
 assert_mapping = {
